@@ -6,11 +6,13 @@
 #include "FileOperations.h"
 #include "ProgressDialog.h"
 #include <shobjidl.h>
+#include <shlobj.h>
 #include <thread>
 #include <memory>
 #include <string>
 
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "ole32.lib")
 #pragma comment(linker,"\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 #define MAX_LOADSTRING 100
@@ -208,14 +210,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             default:
                 return DefWindowProc(hWnd, message, wParam, lParam);
             }
-        }
-        break;
-
-    case WM_CTLCOLORSTATIC:
-        {
-            HDC hdcStatic = (HDC)wParam;
-            SetBkMode(hdcStatic, TRANSPARENT);
-            return (LRESULT)GetStockObject(NULL_BRUSH);
         }
         break;
 
@@ -438,12 +432,18 @@ void PerformMove(HWND hwnd)
     EnableWindow(g_hDestButton, FALSE);
     SetWindowTextW(g_hStatusText, L"正在移动文件...");
     
+    // 创建进度对话框
+    g_progressDlg = std::make_unique<ProgressDialog>();
+    if (!g_progressDlg->Create(hwnd)) {
+        MessageBoxW(hwnd, L"无法创建进度对话框", L"错误", MB_OK | MB_ICONERROR);
+        EnableWindow(g_hMoveButton, TRUE);
+        EnableWindow(g_hSourceButton, TRUE);
+        EnableWindow(g_hDestButton, TRUE);
+        return;
+    }
+    
     // 在新线程中执行移动操作
     std::thread([hwnd, source, dest, createSymlink]() {
-        // 创建进度对话框
-        g_progressDlg = std::make_unique<ProgressDialog>();
-        g_progressDlg->Show(hwnd);
-        
         // 执行移动
         auto result = g_fileOps->MoveDirectory(
             source,
@@ -456,7 +456,7 @@ void PerformMove(HWND hwnd)
             }
         );
         
-        // 关闭进度对话框
+        // 先关闭进度对话框
         if (g_progressDlg) {
             g_progressDlg->Close();
             g_progressDlg.reset();

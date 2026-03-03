@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <windows.h>
 #include <string>
 #include <functional>
@@ -67,9 +67,10 @@ private:
     );
 
     // 复制单个文件
-    OperationResult CopyFile(
+    OperationResult CopyFileTo(
         const std::wstring& source,
         const std::wstring& dest,
+        ULONGLONG totalSize,
         ULONGLONG& processedSize,
         ProgressCallback progressCallback
     );

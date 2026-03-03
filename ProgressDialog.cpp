@@ -1,4 +1,4 @@
-#include "framework.h"
+﻿#include "framework.h"
 #include "ProgressDialog.h"
 #include <sstream>
 #include <iomanip>
@@ -16,7 +16,7 @@ ProgressDialog::ProgressDialog()
     , m_hDetailText(nullptr)
     , m_hCancelButton(nullptr)
     , m_cancelled(false)
-    , m_shouldClose(false)
+    , m_created(false)
 {
 }
 
@@ -25,28 +25,11 @@ ProgressDialog::~ProgressDialog()
     Close();
 }
 
-void ProgressDialog::Show(HWND parent)
+bool ProgressDialog::Create(HWND parent)
 {
     m_hParent = parent;
     m_cancelled = false;
-    m_shouldClose = false;
     
-    // 在新线程中创建对话框
-    m_thread = std::thread(&ProgressDialog::DialogThread, this);
-}
-
-void ProgressDialog::Close()
-{
-    m_shouldClose = true;
-    
-    // 等待对话框线程结束
-    if (m_thread.joinable()) {
-        m_thread.join();
-    }
-}
-
-void ProgressDialog::DialogThread()
-{
     // 初始化通用控件
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
@@ -56,13 +39,18 @@ void ProgressDialog::DialogThread()
     // 创建对话框窗口
     WNDCLASSEXW wc = { 0 };
     wc.cbSize = sizeof(WNDCLASSEXW);
-    wc.lpfnWndProc = DialogProc;
+    wc.lpfnWndProc = WndProc;
     wc.hInstance = GetModuleHandle(NULL);
     wc.lpszClassName = L"ProgressDialogClass";
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     
-    RegisterClassExW(&wc);
+    // 先注销可能存在的类
+    UnregisterClassW(L"ProgressDialogClass", GetModuleHandle(NULL));
+    
+    if (!RegisterClassExW(&wc)) {
+        return false;
+    }
     
     // 创建窗口
     m_hDlg = CreateWindowExW(
@@ -78,8 +66,11 @@ void ProgressDialog::DialogThread()
     );
     
     if (!m_hDlg) {
-        return;
+        return false;
     }
+    
+    // 存储this指针到窗口
+    SetWindowLongPtrW(m_hDlg, GWLP_USERDATA, (LONG_PTR)this);
     
     // 居中显示
     RECT rc;
@@ -97,18 +88,37 @@ void ProgressDialog::DialogThread()
     ShowWindow(m_hDlg, SW_SHOW);
     UpdateWindow(m_hDlg);
     
-    // 消息循环
+    m_created = true;
+    return true;
+}
+
+void ProgressDialog::Close()
+{
+    if (m_hDlg) {
+        // 标记为主动关闭，避免弹出确认对话框
+        m_created = false;
+        // 使用SendMessage确保窗口在其创建线程中被销毁
+        SendMessageW(m_hDlg, WM_CLOSE, 0, 0);
+        // 等待窗口实际被销毁
+        int timeout = 50; // 500ms超时
+        while (m_hDlg != nullptr && timeout-- > 0) {
+            Sleep(10);
+        }
+        m_hDlg = nullptr;
+    }
+    m_created = false;
+}
+
+void ProgressDialog::ProcessMessages()
+{
+    if (!m_hDlg) return;
+    
     MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0) && !m_shouldClose) {
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
         if (!IsDialogMessage(m_hDlg, &msg)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
-    }
-    
-    if (m_hDlg) {
-        DestroyWindow(m_hDlg);
-        m_hDlg = nullptr;
     }
 }
 
@@ -162,14 +172,14 @@ void ProgressDialog::InitDialog()
 
 void ProgressDialog::UpdateProgress(ULONGLONG current, ULONGLONG total, const std::wstring& message)
 {
-    if (!m_hDlg) return;
+    if (!m_hDlg || !m_created) return;
     
     // 计算进度百分比
     int percentage = total > 0 ? (int)((current * 100) / total) : 0;
     
     // 更新进度条
     if (m_hProgressBar) {
-        SendMessage(m_hProgressBar, PBM_SETPOS, percentage, 0);
+        PostMessage(m_hProgressBar, PBM_SETPOS, percentage, 0);
     }
     
     // 更新状态文本
@@ -184,51 +194,66 @@ void ProgressDialog::UpdateProgress(ULONGLONG current, ULONGLONG total, const st
     if (m_hDetailText && !message.empty()) {
         SetWindowTextW(m_hDetailText, message.c_str());
     }
+    
+    // 处理消息以更新UI
+    ProcessMessages();
 }
 
-INT_PTR CALLBACK ProgressDialog::DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK ProgressDialog::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    ProgressDialog* pThis = nullptr;
+    ProgressDialog* pThis = (ProgressDialog*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
     
     if (message == WM_CREATE) {
         CREATESTRUCT* pCreate = (CREATESTRUCT*)lParam;
         pThis = (ProgressDialog*)pCreate->lpCreateParams;
-        SetWindowLongPtr(hDlg, GWLP_USERDATA, (LONG_PTR)pThis);
-    } else {
-        pThis = (ProgressDialog*)GetWindowLongPtr(hDlg, GWLP_USERDATA);
+        if (pThis) {
+            SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)pThis);
+        }
+        return 0;
     }
     
     switch (message) {
         case WM_COMMAND:
             if (LOWORD(wParam) == IDC_CANCEL_BUTTON) {
                 if (pThis) {
-                    int result = MessageBoxW(hDlg, L"\u786e\u5b9a\u8981\u53d6\u6d88\u5f53\u524d\u64cd\u4f5c\u5417\uff1f", L"\u786e\u8ba4\u53d6\u6d88",
+                    int result = MessageBoxW(hWnd, L"确定要取消当前操作吗？", L"确认取消",
                         MB_YESNO | MB_ICONQUESTION);
                     if (result == IDYES) {
                         pThis->m_cancelled = true;
                         EnableWindow(pThis->m_hCancelButton, FALSE);
-                        SetWindowTextW(pThis->m_hStatusText, L"\u6b63\u5728\u53d6\u6d88...");
+                        SetWindowTextW(pThis->m_hStatusText, L"正在取消...");
                     }
                 }
-                return TRUE;
+                return 0;
             }
             break;
             
         case WM_CLOSE:
-            if (pThis && !pThis->m_shouldClose) {
-                // 防止用户直接关闭对话框
-                int result = MessageBoxW(hDlg, L"\u786e\u5b9a\u8981\u53d6\u6d88\u5f53\u524d\u64cd\u4f5c\u5417\uff1f", L"\u786e\u8ba4\u53d6\u6d88",
-                    MB_YESNO | MB_ICONQUESTION);
-                if (result == IDYES) {
-                    pThis->m_cancelled = true;
-                    pThis->m_shouldClose = true;
+            if (pThis) {
+                // 如果是程序主动关闭（m_created=false），直接销毁
+                if (!pThis->m_created) {
+                    DestroyWindow(hWnd);
+                } else {
+                    // 如果是用户点击关闭按钮，询问确认
+                    int result = MessageBoxW(hWnd, L"确定要取消当前操作吗？", L"确认取消",
+                        MB_YESNO | MB_ICONQUESTION);
+                    if (result == IDYES) {
+                        pThis->m_cancelled = true;
+                        DestroyWindow(hWnd);
+                    }
                 }
-                return TRUE;
+                return 0;
             }
             break;
+            
+        case WM_DESTROY:
+            if (pThis) {
+                pThis->m_hDlg = nullptr;
+            }
+            return 0;
     }
     
-    return FALSE;
+    return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
 std::wstring ProgressDialog::FormatFileSize(ULONGLONG size)

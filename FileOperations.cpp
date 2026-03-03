@@ -1,4 +1,4 @@
-#include "framework.h"
+﻿#include "framework.h"
 #include "FileOperations.h"
 #include <shlwapi.h>
 #include <vector>
@@ -244,7 +244,7 @@ FileOperations::OperationResult FileOperations::CopyDirectoryRecursive(
         if (error != ERROR_ALREADY_EXISTS) {
             result.success = false;
             result.errorCode = error;
-            std::wstring errMsg = L"\u521b\u5efa\u76ee\u5f55\u5931\u8d25: ";
+            std::wstring errMsg = L"创建目录失败: ";
             result.errorMessage = errMsg + GetLastErrorMessage(error);
             return result;
         }
@@ -258,14 +258,14 @@ FileOperations::OperationResult FileOperations::CopyDirectoryRecursive(
     if (hFind == INVALID_HANDLE_VALUE) {
         result.success = false;
         result.errorCode = GetLastError();
-        result.errorMessage = L"\u65e0\u6cd5\u8bbf\u95ee\u6e90\u76ee\u5f55";
+        result.errorMessage = L"无法访问源目录";
         return result;
     }
     
     do {
         if (m_cancelled) {
             result.success = false;
-            result.errorMessage = L"\u64cd\u4f5c\u5df2\u53d6\u6d88";
+            result.errorMessage = L"操作已取消";
             FindClose(hFind);
             return result;
         }
@@ -286,7 +286,7 @@ FileOperations::OperationResult FileOperations::CopyDirectoryRecursive(
             }
         } else {
             // 复制文件
-            result = CopyFile(srcPath, dstPath, processedSize, progressCallback);
+            result = CopyFileTo(srcPath, dstPath, totalSize, processedSize, progressCallback);
             if (!result.success) {
                 FindClose(hFind);
                 return result;
@@ -298,9 +298,10 @@ FileOperations::OperationResult FileOperations::CopyDirectoryRecursive(
     return result;
 }
 
-FileOperations::OperationResult FileOperations::CopyFile(
+FileOperations::OperationResult FileOperations::CopyFileTo(
     const std::wstring& source,
     const std::wstring& dest,
+    ULONGLONG totalSize,
     ULONGLONG& processedSize,
     ProgressCallback progressCallback)
 {
@@ -311,7 +312,7 @@ FileOperations::OperationResult FileOperations::CopyFile(
     WIN32_FILE_ATTRIBUTE_DATA fileInfo;
     if (!GetFileAttributesExW(source.c_str(), GetFileExInfoStandard, &fileInfo)) {
         result.errorCode = GetLastError();
-        result.errorMessage = L"\u65e0\u6cd5\u83b7\u53d6\u6587\u4ef6\u4fe1\u606f";
+        result.errorMessage = L"无法获取文件信息";
         return result;
     }
     
@@ -319,9 +320,9 @@ FileOperations::OperationResult FileOperations::CopyFile(
     fileSize.LowPart = fileInfo.nFileSizeLow;
     fileSize.HighPart = fileInfo.nFileSizeHigh;
     
-    // 报告进度
+    // 报告进度 - 使用totalSize作为总大小
     if (progressCallback) {
-        progressCallback(processedSize, processedSize + fileSize.QuadPart, source);
+        progressCallback(processedSize, totalSize, source);
     }
     
     // 复制文件
@@ -330,7 +331,7 @@ FileOperations::OperationResult FileOperations::CopyFile(
         processedSize += fileSize.QuadPart;
     } else {
         result.errorCode = GetLastError();
-        std::wstring errMsg = L"\u590d\u5236\u6587\u4ef6\u5931\u8d25: ";
+        std::wstring errMsg = L"复制文件失败: ";
         result.errorMessage = errMsg + GetLastErrorMessage(result.errorCode);
     }
     
