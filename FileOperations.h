@@ -16,6 +16,10 @@ public:
         bool success;
         std::wstring errorMessage;
         DWORD errorCode;
+        bool rollbackFailed;  // 回滚是否失败
+        std::wstring rollbackErrorMessage;  // 回滚失败的错误信息
+        
+        OperationResult() : success(false), errorCode(0), rollbackFailed(false) {}
     };
 
     FileOperations();
@@ -76,7 +80,14 @@ private:
     );
 
     // 删除目录（递归）
-    static OperationResult DeleteDirectoryRecursive(const std::wstring& path);
+    OperationResult DeleteDirectoryRecursive(const std::wstring& path);
+
+    // 回滚操作：将目标目录的内容移回源目录
+    OperationResult RollbackMove(
+        const std::wstring& sourcePath,
+        const std::wstring& destPath,
+        ProgressCallback progressCallback = nullptr
+    );
 
     // 获取错误消息
     static std::wstring GetLastErrorMessage(DWORD errorCode);

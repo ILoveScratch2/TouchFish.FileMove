@@ -203,9 +203,34 @@ FileOperations::OperationResult FileOperations::MoveDirectory(
         
         // 2. 删除源目录
         result = DeleteDirectoryRecursive(sourcePath);
-        if (!result.success) {
-            std::wstring errMsg = L"\u6587\u4ef6\u5df2\u590d\u5236\uff0c\u4f46\u5220\u9664\u6e90\u76ee\u5f55\u5931\u8d25: ";
-            result.errorMessage = errMsg + result.errorMessage;
+        if (!result.success || m_cancelled) {
+            // 删除源目录失败或被取消，需要回滚
+            std::wstring originalError = result.errorMessage;
+            
+            if (progressCallback) {
+                progressCallback(0, 100, L"删除源目录失败，正在回滚...");
+            }
+            
+            // 执行回滚
+            auto rollbackResult = RollbackMove(sourcePath, destPath, progressCallback);
+            
+            if (!rollbackResult.success) {
+                // 回滚失败
+                result.rollbackFailed = true;
+                result.rollbackErrorMessage = rollbackResult.errorMessage;
+                std::wstring errMsg = L"删除源目录失败: " + originalError + 
+                                     L"\n\n尝试回滚也失败: " + rollbackResult.errorMessage +
+                                     L"\n\n警告：部分文件可能已复制到目标位置，请手动检查和处理！";
+                result.errorMessage = errMsg;
+            } else {
+                // 回滚成功
+                if (m_cancelled) {
+                    result.errorMessage = L"操作已取消，文件已回滚到原位置";
+                } else {
+                    result.errorMessage = L"删除源目录失败: " + originalError + 
+                                         L"\n文件已回滚到原位置";
+                }
+            }
             return result;
         }
         
@@ -218,9 +243,14 @@ FileOperations::OperationResult FileOperations::MoveDirectory(
     if (result.success && createSymlink) {
         auto symlinkResult = CreateSymbolicLink(sourcePath, destPath);
         if (!symlinkResult.success) {
-            std::wstring errMsg = L"\u6587\u4ef6\u79fb\u52a8\u6210\u529f\uff0c\u4f46\u521b\u5efa\u7b26\u53f7\u94fe\u63a5\u5931\u8d25: ";
-            result.errorMessage = errMsg + symlinkResult.errorMessage;
-            result.success = false;
+            // 符号链接创建失败，但文件已移动成功
+            // 询问是否需要回滚
+            std::wstring errMsg = L"文件移动成功，但创建符号链接失败: " + symlinkResult.errorMessage;
+            
+            // 这里不自动回滚，而是让上层决定
+            result.errorMessage = errMsg;
+            result.success = false;  // 标记为失败，让上层处理
+            result.errorCode = symlinkResult.errorCode;
             return result;
         }
     }
@@ -338,6 +368,72 @@ FileOperations::OperationResult FileOperations::CopyFileTo(
     return result;
 }
 
+// 回滚操作：将目标目录的内容移回源目录
+FileOperations::OperationResult FileOperations::RollbackMove(
+    const std::wstring& sourcePath,
+    const std::wstring& destPath,
+    ProgressCallback progressCallback)
+{
+    OperationResult result;
+    result.success = false;
+    
+    if (progressCallback) {
+        progressCallback(0, 100, L"正在回滚操作...");
+    }
+    
+    // 检查目标路径是否存在
+    if (!IsValidPath(destPath)) {
+        result.errorMessage = L"目标路径不存在，无需回滚";
+        result.success = true;  // 不算失败，因为没有需要回滚的内容
+        return result;
+    }
+    
+    // 尝试将目标目录移回源目录
+    bool sameDrive = IsSameDrive(sourcePath, destPath);
+    
+    if (sameDrive) {
+        // 同一驱动器，直接移动回去
+        if (MoveFileW(destPath.c_str(), sourcePath.c_str())) {
+            result.success = true;
+            if (progressCallback) {
+                progressCallback(100, 100, L"回滚完成");
+            }
+        } else {
+            result.errorCode = GetLastError();
+            std::wstring errMsg = L"回滚失败（无法移动目录）: ";
+            result.errorMessage = errMsg + GetLastErrorMessage(result.errorCode);
+        }
+    } else {
+        // 不同驱动器，需要复制回去然后删除目标
+        ULONGLONG totalSize = GetDirectorySize(destPath);
+        ULONGLONG processedSize = 0;
+        
+        // 复制回源目录
+        result = CopyDirectoryRecursive(destPath, sourcePath, totalSize, processedSize, progressCallback);
+        
+        if (!result.success) {
+            std::wstring errMsg = L"回滚失败（无法复制文件回源位置）: ";
+            result.errorMessage = errMsg + result.errorMessage;
+            return result;
+        }
+        
+        // 删除目标目录
+        auto deleteResult = DeleteDirectoryRecursive(destPath);
+        if (!deleteResult.success) {
+            // 复制回去成功但删除目标失败，这不算回滚失败
+            result.success = true;
+            result.errorMessage = L"文件已回滚到源位置，但目标位置的副本无法删除: " + deleteResult.errorMessage;
+        } else {
+            result.success = true;
+            if (progressCallback) {
+                progressCallback(100, 100, L"回滚完成");
+            }
+        }
+    }
+    
+    return result;
+}
+
 FileOperations::OperationResult FileOperations::DeleteDirectoryRecursive(const std::wstring& path)
 {
     OperationResult result;
@@ -355,6 +451,14 @@ FileOperations::OperationResult FileOperations::DeleteDirectoryRecursive(const s
     }
     
     do {
+        // 检查是否被取消
+        if (m_cancelled) {
+            result.success = false;
+            result.errorMessage = L"\u64cd\u4f5c\u5df2\u53d6\u6d88";
+            FindClose(hFind);
+            return result;
+        }
+        
         if (wcscmp(findData.cFileName, L".") == 0 || wcscmp(findData.cFileName, L"..") == 0) {
             continue;
         }

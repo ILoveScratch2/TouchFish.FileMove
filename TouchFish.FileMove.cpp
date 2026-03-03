@@ -470,9 +470,20 @@ void PerformMove(HWND hwnd)
         }
         else
         {
-            std::wstring errorMsg = L"移动失败:\n" + result.errorMessage;
-            MessageBoxW(hwnd, errorMsg.c_str(), L"错误", MB_OK | MB_ICONERROR);
-            SetWindowTextW(g_hStatusText, L"移动失败");
+            // 检查是否回滚失败
+            if (result.rollbackFailed)
+            {
+                std::wstring errorMsg = L"操作失败且回滚失败！\n\n" + result.errorMessage +
+                    L"\n\n请立即手动检查源目录和目标目录的文件状态，并手动恢复！";
+                MessageBoxW(hwnd, errorMsg.c_str(), L"严重错误", MB_OK | MB_ICONERROR);
+                SetWindowTextW(g_hStatusText, L"移动失败且回滚失败");
+            }
+            else
+            {
+                std::wstring errorMsg = L"移动失败:\n" + result.errorMessage;
+                MessageBoxW(hwnd, errorMsg.c_str(), L"错误", MB_OK | MB_ICONERROR);
+                SetWindowTextW(g_hStatusText, L"移动失败");
+            }
         }
         
         // 重新启用按钮
