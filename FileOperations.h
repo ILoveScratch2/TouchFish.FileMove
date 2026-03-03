@@ -58,6 +58,9 @@ public:
     // 检查是否在同一驱动器
     static bool IsSameDrive(const std::wstring& path1, const std::wstring& path2);
 
+    // 获取目录名称（路径的最后一部分）
+    static std::wstring GetDirectoryName(const std::wstring& path);
+
 private:
     std::atomic<bool> m_cancelled;
     

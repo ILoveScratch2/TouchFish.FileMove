@@ -97,6 +97,23 @@ bool FileOperations::IsSameDrive(const std::wstring& path1, const std::wstring& 
     return drive1 == drive2;
 }
 
+std::wstring FileOperations::GetDirectoryName(const std::wstring& path)
+{
+    // 移除末尾的反斜杠
+    std::wstring cleanPath = path;
+    while (!cleanPath.empty() && (cleanPath.back() == L'\\' || cleanPath.back() == L'/')) {
+        cleanPath.pop_back();
+    }
+    
+    // 查找最后一个路径分隔符
+    size_t pos = cleanPath.find_last_of(L"\\/");
+    if (pos == std::wstring::npos) {
+        return cleanPath;  // 没有路径分隔符，返回整个字符串
+    }
+    
+    return cleanPath.substr(pos + 1);
+}
+
 std::wstring FileOperations::GetLastErrorMessage(DWORD errorCode)
 {
     LPWSTR buffer = nullptr;
@@ -156,10 +173,23 @@ FileOperations::OperationResult FileOperations::MoveDirectory(
         return result;
     }
     
-    // 检查目标路径是否已存在
+    // 处理目标路径
+    std::wstring finalDestPath = destPath;
+    
+    // 如果目标路径已存在，在其下创建源目录同名的子目录
     if (IsValidPath(destPath)) {
-        result.errorMessage = L"\u76ee\u6807\u8def\u5f84\u5df2\u5b58\u5728";
-        return result;
+        std::wstring sourceDirName = GetDirectoryName(sourcePath);
+        finalDestPath = destPath;
+        if (!finalDestPath.empty() && finalDestPath.back() != L'\\' && finalDestPath.back() != L'/') {
+            finalDestPath += L"\\";
+        }
+        finalDestPath += sourceDirName;
+        
+        // 检查新的目标路径是否也存在
+        if (IsValidPath(finalDestPath)) {
+            result.errorMessage = L"\u76ee\u6807\u8def\u5f84\u5df2\u5b58\u5728: " + finalDestPath;
+            return result;
+        }
     }
     
     // 获取总大小用于进度显示
@@ -171,11 +201,11 @@ FileOperations::OperationResult FileOperations::MoveDirectory(
     }
     
     // 检查是否在同一驱动器
-    bool sameDrive = IsSameDrive(sourcePath, destPath);
+    bool sameDrive = IsSameDrive(sourcePath, finalDestPath);
     
     if (sameDrive) {
         // 同一驱动器，直接移动
-        if (MoveFileW(sourcePath.c_str(), destPath.c_str())) {
+        if (MoveFileW(sourcePath.c_str(), finalDestPath.c_str())) {
             result.success = true;
             
             if (progressCallback) {
@@ -190,11 +220,11 @@ FileOperations::OperationResult FileOperations::MoveDirectory(
     } else {
         // 不同驱动器，需要复制后删除
         // 1. 复制文件
-        result = CopyDirectoryRecursive(sourcePath, destPath, totalSize, processedSize, progressCallback);
+        result = CopyDirectoryRecursive(sourcePath, finalDestPath, totalSize, processedSize, progressCallback);
         
         if (!result.success || m_cancelled) {
             // 复制失败或被取消，清理已复制的文件
-            DeleteDirectoryRecursive(destPath);
+            DeleteDirectoryRecursive(finalDestPath);
             if (m_cancelled) {
                 result.errorMessage = L"\u64cd\u4f5c\u5df2\u53d6\u6d88";
             }
@@ -212,7 +242,7 @@ FileOperations::OperationResult FileOperations::MoveDirectory(
             }
             
             // 执行回滚
-            auto rollbackResult = RollbackMove(sourcePath, destPath, progressCallback);
+            auto rollbackResult = RollbackMove(sourcePath, finalDestPath, progressCallback);
             
             if (!rollbackResult.success) {
                 // 回滚失败
@@ -241,7 +271,7 @@ FileOperations::OperationResult FileOperations::MoveDirectory(
     
     // 3. 创建符号链接（如果需要）
     if (result.success && createSymlink) {
-        auto symlinkResult = CreateSymbolicLink(sourcePath, destPath);
+        auto symlinkResult = CreateSymbolicLink(sourcePath, finalDestPath);
         if (!symlinkResult.success) {
             // 符号链接创建失败，但文件已移动成功
             // 询问是否需要回滚
