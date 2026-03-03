@@ -1,0 +1,76 @@
+name: Build with MSVC
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths:
+      - '*.cpp'
+      - '*.h'
+      - '*.vcxproj'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+  release:
+    types: [published]
+
+env:
+  SOLUTION_FILE_PATH: ./TouchFish.FileMove.sln
+  BUILD_CONFIGURATION: Release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    strategy:
+      matrix:
+        platform: [x64]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Restore NuGet packages
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: nuget restore ${{env.SOLUTION_FILE_PATH}}
+      
+    - name: Build
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} /p:Platform=${{matrix.platform}} ${{env.SOLUTION_FILE_PATH}}
+      
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: TouchFish.FileMove-${{matrix.platform}}
+        path: |
+          ${{matrix.platform}}/${{env.BUILD_CONFIGURATION}}/*.exe
+          ${{matrix.platform}}/${{env.BUILD_CONFIGURATION}}/*.dll
+        if-no-files-found: warn
+
+  release:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Download x64 artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: TouchFish.FileMove-x64
+        path: release/x64
+        
+    - name: Create release archives
+      run: |
+        Compress-Archive -Path release/x64/* -DestinationPath TouchFish.FileMove-x64.zip
+        
+    - name: Upload release assets
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          TouchFish.FileMove-x64.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
