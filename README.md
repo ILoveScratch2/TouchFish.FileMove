@@ -1,3 +1,5 @@
+> 本项目已迁移至 https://github.com/touchfish-devs/TouchFish.FileMove
+
 # TouchFish 文件移动器
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 ![Language](https://img.shields.io/badge/language-C++-orange.svg)
